@@ -38,54 +38,56 @@ static MONITORS: LazyLock<Arc<Mutex<HashMap<String, Monitor>>>> =
 async fn monitor_server(endpoint: String) {
     let client = Client::new();
     loop {
-        let mut mutex_guard = MONITORS.lock().await;
-        let monitor = mutex_guard.get_mut(&endpoint).unwrap();
-        // let endpoint = &monitor.endpoint;
+        {
+            let mut mutex_guard = MONITORS.lock().await;
+            let monitor = mutex_guard.get_mut(&endpoint).unwrap();
+            // let endpoint = &monitor.endpoint;
 
-        let current_status = match client.get(&endpoint).send().await {
-            Ok(ok) => {
-                if ok.status().is_success() {
-                    tracing::info!("{} is up (returned {})", endpoint, ok.status());
+            let current_status = match client.get(&endpoint).send().await {
+                Ok(ok) => {
+                    if ok.status().is_success() {
+                        tracing::info!("{} is up (returned {})", endpoint, ok.status());
 
-                    Status::Up
-                } else {
-                    tracing::warn!("{} is failing (returned {})", endpoint, ok.status());
+                        Status::Up
+                    } else {
+                        tracing::warn!("{} is failing (returned {})", endpoint, ok.status());
 
-                    Status::Failing
+                        Status::Failing
+                    }
+                }
+                Err(err) => {
+                    tracing::error!("{} is down: {}", endpoint, err);
+
+                    Status::Down
+                }
+            };
+
+            let mut done = false;
+
+            if let Some(last) = monitor.history.last_mut() {
+                if last.status == current_status {
+                    last.hits += 1;
+                    last.timestamp_end = jiff::Timestamp::now().to_string();
+                    done = true;
                 }
             }
-            Err(err) => {
-                tracing::error!("{} is down: {}", endpoint, err);
 
-                Status::Down
-            }
-        };
+            if !done {
+                monitor.history.push(HistoryLog {
+                    status: current_status,
+                    timestamp_start: jiff::Timestamp::now().to_string(),
+                    timestamp_end: jiff::Timestamp::now().to_string(),
+                    duration: Duration::default(),
+                    hits: 1,
+                });
 
-        let mut done = false;
-
-        if let Some(last) = monitor.history.last_mut() {
-            if last.status == current_status {
-                last.hits += 1;
-                last.timestamp_end = jiff::Timestamp::now().to_string();
-                done = true;
-            }
-        }
-
-        if !done {
-            monitor.history.push(HistoryLog {
-                status: current_status,
-                timestamp_start: jiff::Timestamp::now().to_string(),
-                timestamp_end: jiff::Timestamp::now().to_string(),
-                duration: Duration::default(),
-                hits: 1,
-            });
-
-            if let Some(discord_webhook) = &monitor.discord_webhook {
-                send_discord_webhook_message(
-                    discord_webhook,
-                    &format!("{endpoint} {current_status}"),
-                )
-                .await;
+                if let Some(discord_webhook) = &monitor.discord_webhook {
+                    send_discord_webhook_message(
+                        discord_webhook,
+                        &format!("{endpoint} {current_status}"),
+                    )
+                    .await;
+                }
             }
         }
 
