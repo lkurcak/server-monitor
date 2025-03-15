@@ -1,0 +1,19 @@
+@host=http://localhost:3000
+@server=http://google.com
+@discord_webhook=https://discord.com/api/webhooks/1350534713189728298/RIdgrfAaqRLBiBSFug8mA6KFxi_j7RkVWLpkWfFHSMTnAoufQZahtjTwmuqKeU1X8_l2
+
+### Get root
+GET {{host}}
+
+### Create monitor for endpoint
+POST {{host}}/monitor
+Content-Type: application/json
+
+{
+    "endpoint": "{{server}}",
+    "discord_webhook": "{{discord_webhook}}"
+}
+
+### Get monitor stats for endpoint
+GET {{host}}/monitor?endpoint={{server}}
+
