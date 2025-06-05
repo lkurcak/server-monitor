@@ -24,11 +24,18 @@ jobs:
       - name: Show the version
         run: |
           echo "version is: $VERSION"
-      - name: Check that tag version and Cargo.toml version are the same
+      - name: Check version consistency
         shell: bash
         run: |
+          # Check Cargo.toml version
           if ! grep -q "version = \"$VERSION\"" Cargo.toml; then
-            echo "version does not match Cargo.toml" >&2
+            echo "version in `Cargo.toml` does not match tag version $VERSION" >&2
+            exit 1
+          fi
+          
+          # Check main.rs root endpoint
+          if ! grep -q "server-monitor $VERSION" src/main.rs; then
+            echo "version in `src/main.rs` does not match tag version $VERSION" >&2
             exit 1
           fi
       - name: Create GitHub release
