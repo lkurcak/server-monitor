@@ -11,7 +11,9 @@ Content-Type: application/json
 
 {
     "endpoint": "{{server}}",
-    "discord_webhook": "{{discord_webhook}}"
+    "discord_webhook": ["{{discord_webhook}}"],
+    "success_hits": 4,
+    "fail_hits": 2
 }
 
 ### Get monitor stats for endpoint

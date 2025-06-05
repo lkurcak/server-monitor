@@ -80,8 +80,18 @@ async fn monitor_server(endpoint: String) {
                     duration: Duration::default(),
                     hits: 1,
                 });
+            }
 
-                if let Some(discord_webhook) = &monitor.discord_webhook {
+            let last = monitor.history.last_mut().unwrap();
+
+            let send_notification = match last.status {
+                Status::Up => last.hits == monitor.settings.success_hits,
+                Status::Down => last.hits == monitor.settings.fail_hits,
+                Status::Failing => last.hits == monitor.settings.fail_hits,
+            };
+
+            if send_notification {
+                for discord_webhook in &monitor.discord_webhook {
                     send_discord_webhook_message(
                         discord_webhook,
                         &format!("{endpoint} {current_status}"),
@@ -123,6 +133,10 @@ async fn post_monitor(Json(payload): Json<PostMonitorRequest>) -> StatusCode {
         discord_webhook: payload.discord_webhook,
         cancellation_token: CancellationToken::new(),
         history: vec![],
+        settings: MonitorSettings {
+            fail_hits: payload.fail_hits.unwrap_or(1),
+            success_hits: payload.success_hits.unwrap_or(1),
+        },
     };
     let cloned_token = monitor.cancellation_token.clone();
 
@@ -189,17 +203,26 @@ struct HistoryLog {
     hits: u64,
 }
 
+struct MonitorSettings {
+    // How many times in a row a check must fail to send a warning
+    fail_hits: u64,
+    // How many times in a row a check must success to send a message
+    success_hits: u64,
+}
+
 struct Monitor {
-    // endpoint: String,
-    discord_webhook: Option<String>,
+    discord_webhook: Vec<String>,
     cancellation_token: CancellationToken,
     history: Vec<HistoryLog>,
+    settings: MonitorSettings,
 }
 
 #[derive(Deserialize)]
 struct PostMonitorRequest {
     endpoint: String,
-    discord_webhook: Option<String>,
+    discord_webhook: Vec<String>,
+    fail_hits: Option<u64>,
+    success_hits: Option<u64>,
 }
 
 #[derive(Deserialize)]
