@@ -29,7 +29,7 @@ async fn main() {
 }
 
 async fn root() -> &'static str {
-    "server-monitor v0.1.0"
+    "server-monitor 0.2.0"
 }
 
 static MONITORS: LazyLock<Arc<Mutex<HashMap<String, Monitor>>>> =
