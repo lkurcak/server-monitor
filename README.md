@@ -4,10 +4,10 @@
 
 ### Installation
 
-**[Releases](https://github.com/lubomirkurcak/server-monitor/releases)**
+* **[Download a release](https://github.com/lubomirkurcak/server-monitor/releases)**
 
 ### Usage
 
 1. Run `server-monitor`
-2. Create monitor (see api-requests folder)
+2. Create monitors via API (see [requests](/api-requests/requests.http))
 
