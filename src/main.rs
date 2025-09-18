@@ -29,7 +29,7 @@ async fn main() {
 }
 
 async fn root() -> &'static str {
-    "server-monitor 0.2.0"
+    "server-monitor 0.3.0"
 }
 
 static MONITORS: LazyLock<Arc<Mutex<HashMap<String, Monitor>>>> =
@@ -82,19 +82,21 @@ async fn monitor_server(endpoint: String) {
                 });
             }
 
-            let last = monitor.history.last_mut().unwrap();
+            let last = monitor.history.last().unwrap();
+            let (new_in_alert, notify_status) = evaluate_status_transition(
+                monitor.in_alert,
+                last.status,
+                last.hits,
+                &monitor.settings,
+                monitor.history.len() == 1,
+            );
+            monitor.in_alert = new_in_alert;
 
-            let send_notification = match last.status {
-                Status::Up => last.hits == monitor.settings.success_hits,
-                Status::Down => last.hits == monitor.settings.fail_hits,
-                Status::Failing => last.hits == monitor.settings.fail_hits,
-            };
-
-            if send_notification {
+            if let Some(status_to_notify) = notify_status {
                 for discord_webhook in &monitor.discord_webhook {
                     send_discord_webhook_message(
                         discord_webhook,
-                        &format!("{endpoint} {current_status}"),
+                        &format!("{endpoint} {status_to_notify}"),
                     )
                     .await;
                 }
@@ -137,6 +139,7 @@ async fn post_monitor(Json(payload): Json<PostMonitorRequest>) -> StatusCode {
             fail_hits: payload.fail_hits.unwrap_or(1),
             success_hits: payload.success_hits.unwrap_or(1),
         },
+        in_alert: false,
     };
     let cloned_token = monitor.cancellation_token.clone();
 
@@ -177,7 +180,7 @@ async fn get_monitor(
     }
 }
 
-#[derive(Serialize, PartialEq, Eq, Clone, Copy)]
+#[derive(Serialize, PartialEq, Eq, Clone, Copy, Debug)]
 enum Status {
     Up,
     Down,
@@ -190,6 +193,34 @@ impl Display for Status {
             Status::Up => write!(f, "Up"),
             Status::Down => write!(f, "Down"),
             Status::Failing => write!(f, "Failing"),
+        }
+    }
+}
+
+/// Evaluate the current streak and alert state to decide whether to notify.
+/// Returns (new_in_alert, optional_status_to_notify)
+fn evaluate_status_transition(
+    in_alert: bool,
+    status: Status,
+    hits: u64,
+    settings: &MonitorSettings,
+    is_first_segment: bool,
+) -> (bool, Option<Status>) {
+    match status {
+        Status::Up => {
+            // Send OK either when recovering from alert or on the very first segment
+            if (in_alert || is_first_segment) && hits == settings.success_hits {
+                (false, Some(Status::Up))
+            } else {
+                (in_alert, None)
+            }
+        }
+        Status::Down | Status::Failing => {
+            if hits == settings.fail_hits {
+                (true, Some(status))
+            } else {
+                (in_alert, None)
+            }
         }
     }
 }
@@ -215,6 +246,8 @@ struct Monitor {
     cancellation_token: CancellationToken,
     history: Vec<HistoryLog>,
     settings: MonitorSettings,
+    // Whether we've sent a failure alert and are waiting to send a recovery OK
+    in_alert: bool,
 }
 
 #[derive(Deserialize)]
@@ -234,4 +267,88 @@ struct GetMonitorRequest {
 struct GetMonitorResponse {
     status: Status,
     history: Vec<HistoryLog>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_sequence(sequence: &[Status], fail_hits: u64, success_hits: u64) -> Vec<Status> {
+        let settings = MonitorSettings {
+            fail_hits,
+            success_hits,
+        };
+        let mut in_alert = false;
+        let mut result = Vec::new();
+        let mut last_status: Option<Status> = None;
+        let mut hits: u64 = 0;
+        let mut in_first_segment: bool = true;
+
+        for &s in sequence {
+            if Some(s) == last_status {
+                hits += 1;
+            } else {
+                // If we've seen a status before and it changes now, we exit the first segment
+                if last_status.is_some() {
+                    in_first_segment = false;
+                }
+                last_status = Some(s);
+                hits = 1;
+            }
+            let (new_alert, notify) =
+                evaluate_status_transition(in_alert, s, hits, &settings, in_first_segment);
+            in_alert = new_alert;
+            if let Some(n) = notify {
+                result.push(n);
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn ok_only_after_bad_alerted() {
+        // fail after 2, recover after 3 OK
+        let seq = [
+            Status::Up,
+            Status::Up,
+            Status::Up,      // first OK will be sent after threshold
+            Status::Failing, // 1/2 fail
+            Status::Failing, // 2/2 fail -> BAD
+            Status::Up,      // 1/3 ok
+            Status::Up,      // 2/3 ok
+            Status::Up,      // 3/3 ok -> OK
+            Status::Up,      // continue ok, no more OKs
+        ];
+        let notifications = run_sequence(&seq, 2, 3);
+        assert_eq!(notifications, vec![Status::Up, Status::Failing, Status::Up]);
+    }
+
+    #[test]
+    fn repeated_oks_without_prior_bad_do_not_notify() {
+        let seq = [Status::Up, Status::Up, Status::Up, Status::Up, Status::Up];
+        let notifications = run_sequence(&seq, 2, 2);
+        // First OK after reaching success threshold should be sent once
+        assert_eq!(notifications, vec![Status::Up]);
+    }
+
+    #[test]
+    fn down_threshold_triggers_once() {
+        let seq = [Status::Down, Status::Down, Status::Down];
+        let notifications = run_sequence(&seq, 2, 1);
+        assert_eq!(notifications, vec![Status::Down]);
+    }
+
+    #[test]
+    fn alternating_failures_below_threshold_do_not_trigger() {
+        let seq = [
+            Status::Failing,
+            Status::Up,
+            Status::Failing,
+            Status::Up,
+            Status::Failing,
+            Status::Up,
+        ];
+        let notifications = run_sequence(&seq, 2, 1);
+        assert!(notifications.is_empty());
+    }
 }

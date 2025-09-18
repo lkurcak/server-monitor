@@ -94,6 +94,11 @@ jobs:
           toolchain: stable
           target: ${{ matrix.target }}
 
+      - name: Run tests (release)
+        shell: bash
+        run: |
+          cargo test --release --locked --verbose
+
       - name: Build release binary
         shell: bash
         env:
